@@ -1,0 +1,83 @@
+# 1. Trigger: Ejecuta el pipeline en cada cambio en la rama `main`
+trigger:
+  branches:
+    include:
+      - main
+
+# Variables: Definimos valores reutilizables
+variables:
+  DOTNET_VERSION: '8.0'                      # Versión de .NET usada para compilar
+  MODULE_NAME: 'mymodule2'             # Nombre del módulo IoT Edge
+  MODULE_VERSION: '0.0.1-amd64'                    # Versión del módulo
+  CONTAINER_REGISTRY_ADDRESS: 'mycontainerregistrytutorial.azure.io' # Dirección del Azure Container Registry
+  CONTAINER_REGISTRY_USERNAME: 'myContainerRegistryTutorial'   # Usuario del registro de contenedores
+  CONTAINER_REGISTRY_PASSWORD: 'password' # Contraseña del registro
+
+# Stages: Incluimos las etapas del pipeline
+stages:
+
+  # Etapa Build (CI)
+  - stage: Build
+    displayName: 'Build and Push Docker Image'
+    jobs:
+      - job: J1
+        displayName: 'Build Docker Image'
+        pool:
+          vmImage: 'ubuntu-22.04' # Agente de compilación Ubuntu 22.04
+        steps:
+          #  Compilación del módulo IoT Edge
+          - script: |
+              cd ./modules/$(MODULE_NAME)
+              dotnet publish --os linux --arch x64 /t:PublishContainer
+            displayName: 'Compile IoT Edge Module'
+
+          # Crear y subir imagen Docker al registro de contenedores
+          - script: |
+              docker login -u $(CONTAINER_REGISTRY_USERNAME) -p $(CONTAINER_REGISTRY_PASSWORD) $(CONTAINER_REGISTRY_ADDRESS)
+              docker tag $(MODULE_NAME) $(CONTAINER_REGISTRY_ADDRESS)/$(MODULE_NAME):$(MODULE_VERSION)
+              docker push $(CONTAINER_REGISTRY_ADDRESS)/$(MODULE_NAME):$(MODULE_VERSION)
+            displayName: 'Build and Push Docker Image'
+
+  # Etapa Release (CD)
+  - stage: Release
+    displayName: 'Generate and Deploy IoT Edge Manifest'
+    jobs:
+      - job: J2
+        displayName: 'Deploy to IoT Edge'
+        pool:
+          vmImage: 'ubuntu-22.04' # Agente de despliegue Ubuntu 22.04
+        steps:
+          # Instalar dependencias necesarias (Python y herramientas IoT Edge)
+          - script: |
+              #install python 3.9
+              sudo apt install software-properties-common
+              sudo add-apt-repository ppa:deadsnakes/ppa 
+              sudo apt install python3.9
+              #install pip
+              sudo apt install python3.9-distutils
+              curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+              python3.9 get-pip.py
+              #install iotedgedev
+              python3.9 -m pip install -U iotedgedev pyOpenSSL==22.0.0 urllib3==1.22 requests
+            displayName: 'Install Python 3.9 and IoT Edge Tools'
+
+          # Generar el manifiesto de despliegue
+          - task: AzureIoTEdge@2
+            inputs:
+              action: 'Generate deployment manifest'
+              templateFilePath: 'deployment.template.json'
+              defaultPlatform: 'amd64'
+              deploymentManifestOutputPath: '$(System.DefaultWorkingDirectory)/config/deployment.json'
+              validateGeneratedDeploymentManifest: 'true'
+
+          # Desplegar el módulo en dispositivos IoT Edge
+          - task: AzureIoTEdge@2
+            inputs:
+              action: 'Deploy to IoT Edge devices'
+              deploymentFilePath: '$(System.DefaultWorkingDirectory)/config/deployment.json'
+              azureSubscription: 'Azure for Students(9e6ffb82-6225-48e3-9cc0-18e2f922ced4)'
+              iothubname: 'myIoTHubAdriel'
+              deploymentid: '$(System.TeamProject)-devops-deployment'
+              priority: '0'
+              deviceOption: 'Single Device'
+              deviceId: 'IDPruebas'
